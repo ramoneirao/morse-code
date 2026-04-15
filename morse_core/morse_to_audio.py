@@ -7,16 +7,16 @@ class MorseToAudio:
         self.freq = freq
         self.sample_rate = 44100
         
-        # In standard Morse code:
-        # A dot is 1 time unit long.
-        # A dash is 3 time units long.
-        # Space between parts of the same letter is 1 time unit.
-        # Space between letters is 3 time units.
-        # Space between words is 7 time units.
-        # Formula: time unit (seconds) = 1.2 / WPM.
+        # No código Morse padrão:
+        # Um ponto dura 1 unidade de tempo.
+        # Um traço dura 3 unidades de tempo.
+        # O espaço entre partes da mesma letra é de 1 unidade de tempo.
+        # O espaço entre letras é de 3 unidades de tempo.
+        # O espaço entre palavras é de 7 unidades de tempo.
+        # Fórmula: unidade de tempo (segundos) = 1.2 / WPM.
         self.dot_duration = 1.2 / wpm
         self.dash_duration = self.dot_duration * 3
-        # Spaces
+        # Espaços
         self.intra_char_space = self.dot_duration
         self.letter_space = self.dot_duration * 3
         self.word_space = self.dot_duration * 7
@@ -25,7 +25,7 @@ class MorseToAudio:
         t = np.linspace(0, duration, int(self.sample_rate * duration), False)
         wave = np.sin(self.freq * t * 2 * np.pi)
         
-        # Apply a short envelope to avoid audio clipping / 'clicks' at the edges
+        # Aplica um envelope curto para evitar cortes no áudio / 'clicks' nas bordas
         fade_in = min(int(0.01 * self.sample_rate), len(wave) // 2)
         fade_out = fade_in
         envelope = np.ones(len(wave))
@@ -36,7 +36,7 @@ class MorseToAudio:
         return (wave * envelope).astype(np.float32)
 
     def play(self, morse_code: str):
-        # We generated the morse string with single space between chars and triple space between words
+        # A string morse foi gerada com um espaço simples entre caracteres e espaço triplo entre palavras
         for char in morse_code:
             if char == '.':
                 tone = self.generate_tone(self.dot_duration)
@@ -49,8 +49,8 @@ class MorseToAudio:
                 sd.wait()
                 time.sleep(self.intra_char_space)
             elif char == ' ':
-                # In TextToMorse, letters are separated by ' ' and words by '   '
-                # For each ' ', we wait an additional 2 dot durations.
-                # Since we already waited 1 dot duration after the previous mark (intra_char_space),
-                # waiting 2 more gives us 3 total, which is exactly letter_space!
+                # No TextToMorse, as letras são separadas por ' ' e palavras por '   '
+                # Para cada ' ', esperamos 2 durações de ponto adicionais.
+                # Como já esperamos 1 duração de ponto após a marca anterior (intra_char_space),
+                # esperar mais 2 totaliza 3, que é exatamente o letter_space!
                 time.sleep(self.dot_duration * 2)
