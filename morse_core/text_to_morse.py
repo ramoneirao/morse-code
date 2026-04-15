@@ -12,9 +12,9 @@ class TextToMorse:
 
     def convert(self, text: str) -> str:
         """
-        Converts a normal text string into Morse code.
-        Words are separated by '   ' (3 spaces).
-        Letters are separated by ' ' (1 space).
+        Converte uma string de texto normal em código Morse.
+        Palavras são separadas por '   ' (3 espaços).
+        Letras são separadas por ' ' (1 espaço).
         """
         morse_words = []
         for word in text.strip().upper().split():
