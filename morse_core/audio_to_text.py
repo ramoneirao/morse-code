@@ -1,6 +1,7 @@
 import numpy as np
 import sounddevice as sd
 import time
+import queue
 
 class AudioToText:
     def __init__(self, wpm: int = 15):
@@ -20,65 +21,101 @@ class AudioToText:
             '----.': '9', '-----': '0'
         }
 
-    def listen_and_decode(self, duration: int = 5) -> str:
-        """Grava áudio por uma duração específica e tenta extrair o texto do código Morse."""
-        print(f"Iniciando escuta por {duration} segundos... (Fale/Toque o áudio Morse agora)")
+    def listen_and_decode(self, device=None) -> str:
+        """Grava áudio continuamente e traduz em tempo real até o usuário pressionar Enter."""
+        import threading
         
-        # Grava a entrada do microfone
-        recording = sd.rec(int(duration * self.sample_rate), samplerate=self.sample_rate, channels=1, dtype='float32')
-        sd.wait()
-        print("Processando áudio...")
+        print("Pressione ENTER a qualquer momento para parar a escuta.")
+        print("Iniciando escuta simultânea... (Toque o áudio Morse no outro terminal)")
+        print("\nTexto: ", end='', flush=True)
         
-        # Calcula o envelope de amplitude
-        envelope = np.abs(recording[:, 0])
-        
-        # Suaviza o envelope usando uma janela de média móvel (50ms)
-        window_size = int(self.sample_rate * 0.05)
-        kernel = np.ones(window_size) / window_size
-        smoothed = np.convolve(envelope, kernel, mode='same')
-        
-        # Binariza o sinal (o tom está ligado ou desligado?)
-        is_on = smoothed > self.threshold
-        
-        # Encontra as bordas de subida e descida
-        diff = np.diff(is_on.astype(int))
-        starts = np.where(diff == 1)[0]
-        ends = np.where(diff == -1)[0]
-        
-        # Trata casos extremos onde a gravação começa/termina no meio de um tom
-        if len(starts) == 0 or len(ends) == 0:
-            return ""
+        q = queue.Queue()
+        def callback(indata, frames, time, status):
+            q.put(indata[:, 0].copy())
             
-        if ends[0] < starts[0]:
-            starts = np.insert(starts, 0, 0)
-        if len(starts) > len(ends):
-            ends = np.append(ends, len(is_on) - 1)
+        state = 'SILENCE'
+        state_duration = 0.0
+        current_morse = ""
+        decoded_text = ""
+        running_max = 0.01
+        
+        stop_event = threading.Event()
+        
+        def process_audio():
+            nonlocal state, state_duration, current_morse, decoded_text, running_max
+            window_size = int(self.sample_rate * 0.05)
+            kernel = np.ones(window_size) / window_size
+            overlap = np.zeros(window_size - 1)
             
-        durations_on = (ends - starts) / self.sample_rate
-        
-        # Calcula durações de silêncio entre tons
-        silence_starts = ends[:-1]
-        silence_ends = starts[1:]
-        durations_off = (silence_ends - silence_starts) / self.sample_rate
-        
-        morse_code = ""
-        for i in range(len(durations_on)):
-            # Distingue ponto (1 unidade) vs traço (3 unidades)
-            # Limiar em 2 unidades
-            if durations_on[i] < self.dot_duration * 2.0:
-                morse_code += "."
-            else:
-                morse_code += "-"
+            dot_frames = self.dot_duration * self.sample_rate
+            letter_space_frames = dot_frames * 2.5
+            word_space_frames = dot_frames * 6.0
+            
+            printed_letter = True
+            printed_word = True
+            
+            while not stop_event.is_set() or not q.empty():
+                try:
+                    chunk = q.get(timeout=0.1)
+                except queue.Empty:
+                    continue
                 
-            if i < len(durations_off):
-                # Distingue espaço entre letras vs espaço entre palavras vs espaço entre caracteres
-                if durations_off[i] > self.dot_duration * 4.5:
-                    morse_code += "   " # espaço entre palavras
-                elif durations_off[i] > self.dot_duration * 2.0:
-                    morse_code += " " # espaço entre letras
+                envelope = np.abs(chunk)
+                chunk_max = np.max(envelope) if len(envelope) > 0 else 0
+                if chunk_max > running_max:
+                    running_max = chunk_max
+                else:
+                    running_max = running_max * 0.999
                     
-        print(f"Código Morse Bruto Extraído: {morse_code}")
-        return self._decode_morse_string(morse_code)
+                threshold_real = max(0.02, running_max * 0.3)
+                
+                combined = np.concatenate((overlap, envelope))
+                smoothed = np.convolve(combined, kernel, mode='valid')
+                if window_size > 1:
+                    overlap = envelope[-(window_size - 1):]
+                
+                is_on = smoothed > threshold_real
+                
+                for val in is_on:
+                    if val and state == 'SILENCE':
+                        state = 'TONE'
+                        state_duration = 1
+                        printed_letter = False
+                        printed_word = False
+                    elif not val and state == 'TONE':
+                        if state_duration < dot_frames * 2.0:
+                            current_morse += "."
+                        else:
+                            current_morse += "-"
+                        state = 'SILENCE'
+                        state_duration = 1
+                    else:
+                        state_duration += 1
+                        if state == 'SILENCE':
+                            if not printed_letter and state_duration > letter_space_frames:
+                                if current_morse:
+                                    char = self.REVERSE_DICT.get(current_morse, '?')
+                                    print(char, end='', flush=True)
+                                    decoded_text += char
+                                    current_morse = ""
+                                printed_letter = True
+                            if not printed_word and state_duration > word_space_frames:
+                                print(" ", end='', flush=True)
+                                decoded_text += " "
+                                printed_word = True
+                                
+        t = threading.Thread(target=process_audio)
+        t.start()
+        
+        stream = sd.InputStream(samplerate=self.sample_rate, channels=1, dtype='float32', device=device, blocksize=2048, callback=callback)
+        with stream:
+            input()
+            
+        stop_event.set()
+        t.join()
+        
+        print("\n\n[Tradução Finalizada]")
+        return decoded_text.strip()
 
     def _decode_morse_string(self, morse_string: str) -> str:
         """Converte a string morse bruta separada por espaços de volta para texto alfanumérico."""
